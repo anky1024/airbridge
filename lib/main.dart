@@ -41,6 +41,9 @@ class AirBridgeHomePage extends StatefulWidget {
 class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   HttpServer? _receiveServer;
   String? _receiveUrl;
+  HttpServer? _sendServer;
+  String? _sendUrl;
+  List<PlatformFile> _sharedFiles = [];
   StateSetter? _refreshReceiverDialog;
   final List<String> _receivedFiles = [];
 
@@ -299,46 +302,19 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     );
   }
 
-  static Future<void> _pickFiles(BuildContext context) async {
+  Future<void> _pickFiles(BuildContext context) async {
     try {
       final result = await FilePicker.platform.pickFiles(allowMultiple: true);
       if (result == null || !context.mounted) return;
       final files = result.files;
-      await showDialog<void>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          backgroundColor: cardColor,
-          title: Text('Selected files (${files.length})'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView.separated(
-              shrinkWrap: true,
-              itemCount: files.length,
-              separatorBuilder: (_, _) => const Divider(color: Colors.white12),
-              itemBuilder: (context, index) {
-                final file = files[index];
-                final size = file.size < 1024
-                    ? '${file.size} B'
-                    : file.size < 1024 * 1024
-                        ? '${(file.size / 1024).toStringAsFixed(1)} KB'
-                        : '${(file.size / (1024 * 1024)).toStringAsFixed(1)} MB';
-                return ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  leading: const Icon(Icons.insert_drive_file_outlined, color: teal),
-                  title: Text(file.name, maxLines: 2, overflow: TextOverflow.ellipsis),
-                  subtitle: Text(size, style: const TextStyle(color: Colors.white54)),
-                );
-              },
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Done'),
-            ),
-          ],
-        ),
-      );
+      if (files.any((file) => file.path == null)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('One or more selected files could not be accessed. Please choose them again.')),
+        );
+        return;
+      }
+      setState(() => _sharedFiles = files);
+      await _showSendDialog(context);
     } catch (error) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -346,6 +322,150 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
       );
     }
   }
+
+  Future<void> _showSendDialog(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, refreshDialog) => AlertDialog(
+          backgroundColor: cardColor,
+          title: Text(_sendServer == null ? 'Selected files (${_sharedFiles.length})' : 'Files ready to download'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (_sendServer == null) ...[
+                  const Text('Tap Start sharing, then let the other device open the address and download your files.'),
+                  const SizedBox(height: 12),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: _sharedFiles.length,
+                      itemBuilder: (context, index) => ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.insert_drive_file_outlined, color: teal),
+                        title: Text(_sharedFiles[index].name, maxLines: 2, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(_formatSize(_sharedFiles[index].size), style: const TextStyle(color: Colors.white54)),
+                      ),
+                    ),
+                  ),
+                ] else ...[
+                  const Icon(Icons.wifi_tethering_rounded, color: teal, size: 38),
+                  const SizedBox(height: 12),
+                  const Text('On the receiving device, open this address in a browser on the same Wi-Fi:'),
+                  const SizedBox(height: 10),
+                  SelectableText(_sendUrl ?? '', style: const TextStyle(color: teal, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  const Text('The receiver can tap each file to download it. Keep AirBridge open while sharing.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            if (_sendServer == null)
+              TextButton(
+                onPressed: () async {
+                  await _startSharing(context);
+                  refreshDialog(() {});
+                },
+                child: const Text('Start sharing'),
+              )
+            else
+              TextButton(
+                onPressed: () async {
+                  await _sendServer?.close(force: true);
+                  _sendServer = null;
+                  _sendUrl = null;
+                  if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+                  if (mounted) setState(() {});
+                },
+                child: const Text('Stop sharing'),
+              ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text(_sendServer == null ? 'Cancel' : 'Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _startSharing(BuildContext context) async {
+    try {
+      if (_sharedFiles.isEmpty || _sharedFiles.any((file) => file.path == null)) {
+        throw Exception('Please select accessible files first.');
+      }
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+      final addresses = interfaces.expand((interface) => interface.addresses)
+          .where((address) => !address.isLoopback && !address.isLinkLocal).toList();
+      if (addresses.isEmpty) {
+        throw Exception('No local network address found. Connect to Wi-Fi and try again.');
+      }
+      final server = await HttpServer.bind(InternetAddress.anyIPv4, 8766);
+      _sendServer = server;
+      _sendUrl = 'http://${addresses.first.address}:8766';
+      server.listen((request) async {
+        try {
+          if (request.method == 'GET' && request.uri.path == '/') {
+            request.response.headers.contentType = ContentType.html;
+            final rows = _sharedFiles.asMap().entries.map((entry) {
+              final name = const HtmlEscape().convert(entry.value.name);
+              return '<li><a href="/download?index=${entry.key}">Download $name</a> <small>(${_formatSize(entry.value.size)})</small></li>';
+            }).join('\n');
+            request.response.write('''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>AirBridge downloads</title><style>body{font-family:system-ui;background:#0b1220;color:#f5f7fb;max-width:620px;margin:40px auto;padding:20px}main{background:#151f30;border:1px solid #2b394d;border-radius:18px;padding:24px}h1{color:#20d6c7}a{color:#20d6c7;line-height:2}</style></head><body><main><h1>AirBridge</h1><h2>Download shared files</h2><p>Tap a file below to download it to this device.</p><ul>$rows</ul></main></body></html>''');
+            await request.response.close();
+            return;
+          }
+          if (request.method == 'GET' && request.uri.path == '/download') {
+            final index = int.tryParse(request.uri.queryParameters['index'] ?? '');
+            if (index == null || index < 0 || index >= _sharedFiles.length) {
+              request.response.statusCode = HttpStatus.notFound;
+              await request.response.close();
+              return;
+            }
+            final picked = _sharedFiles[index];
+            final file = File(picked.path!);
+            if (!await file.exists()) {
+              request.response.statusCode = HttpStatus.notFound;
+              await request.response.close();
+              return;
+            }
+            final safeName = picked.name.replaceAll('"', '').replaceAll('\r', '').replaceAll('\n', '');
+            request.response.headers
+              ..set(HttpHeaders.contentTypeHeader, 'application/octet-stream')
+              ..set(HttpHeaders.contentDispositionHeader, 'attachment; filename="$safeName"')
+              ..contentLength = await file.length();
+            await request.response.addStream(file.openRead());
+            await request.response.close();
+            return;
+          }
+          request.response.statusCode = HttpStatus.notFound;
+          await request.response.close();
+        } catch (_) {
+          if (!request.response.headersSent) request.response.statusCode = HttpStatus.internalServerError;
+          await request.response.close();
+        }
+      });
+      if (mounted) setState(() {});
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not start sharing: $error')));
+      }
+    }
+  }
+
+  static String _formatSize(int bytes) => bytes < 1024
+      ? '$bytes B'
+      : bytes < 1024 * 1024
+          ? '${(bytes / 1024).toStringAsFixed(1)} KB'
+          : '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 
   Future<void> _startReceiving(BuildContext context) async {
     try {
