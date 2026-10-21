@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -450,7 +451,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             final safeName = picked.name.replaceAll('"', '').replaceAll('\r', '').replaceAll('\n', '');
             request.response.headers
               ..set(HttpHeaders.contentTypeHeader, 'application/octet-stream')
-              ..set(HttpHeaders.contentDispositionHeader, 'attachment; filename="$safeName"')
+              ..set('Content-Disposition', 'attachment; filename="$safeName"')
               ..contentLength = await file.length();
             await request.response.addStream(file.openRead());
             await request.response.close();
@@ -459,8 +460,12 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
           request.response.statusCode = HttpStatus.notFound;
           await request.response.close();
         } catch (_) {
-          if (!request.response.headersSent) request.response.statusCode = HttpStatus.internalServerError;
-          await request.response.close();
+          try {
+            request.response.statusCode = HttpStatus.internalServerError;
+            await request.response.close();
+          } catch (_) {
+            // The response may already have been closed after a client disconnect.
+          }
         }
       });
       if (mounted) setState(() {});
