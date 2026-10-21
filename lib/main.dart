@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 
 void main() {
   runApp(const AirBridgeApp());
@@ -27,9 +28,14 @@ class AirBridgeApp extends StatelessWidget {
   }
 }
 
-class AirBridgeHomePage extends StatelessWidget {
+class AirBridgeHomePage extends StatefulWidget {
   const AirBridgeHomePage({super.key});
 
+  @override
+  State<AirBridgeHomePage> createState() => _AirBridgeHomePageState();
+}
+
+class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   static const Color teal = Color(0xFF20D6C7);
   static const Color cardColor = Color(0xFF151F30);
 
@@ -184,7 +190,7 @@ class AirBridgeHomePage extends StatelessWidget {
                 subtitle: 'Choose files to share with another device',
                 color: teal,
                 onTap: () {
-                  _showComingSoon(context, 'Send files');
+                  _pickFiles(context);
                 },
               ),
 
@@ -283,6 +289,54 @@ class AirBridgeHomePage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  static Future<void> _pickFiles(BuildContext context) async {
+    try {
+      final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+      if (result == null || !context.mounted) return;
+      final files = result.files;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: cardColor,
+          title: Text('Selected files (${files.length})'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: files.length,
+              separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+              itemBuilder: (context, index) {
+                final file = files[index];
+                final size = file.size < 1024
+                    ? '${file.size} B'
+                    : file.size < 1024 * 1024
+                        ? '${(file.size / 1024).toStringAsFixed(1)} KB'
+                        : '${(file.size / (1024 * 1024)).toStringAsFixed(1)} MB';
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.insert_drive_file_outlined, color: teal),
+                  title: Text(file.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(size, style: const TextStyle(color: Colors.white54)),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open file picker: $error')),
+      );
+    }
   }
 
   static void _showComingSoon(BuildContext context, String feature) {
