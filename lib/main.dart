@@ -491,7 +491,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     );
   }
 
-  static const String _receiverHtml = r\'''<!doctype html>
+  static const String _receiverHtml = r'''<!doctype html>
 <html><head><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AirBridge Receive</title>
 <style>
@@ -517,7 +517,7 @@ async function upload(){
   }catch(e){status.textContent+='\n✗ '+file.name+': '+e.message;break;}
  }
 }
-</script></body></html>\''';
+</script></body></html>''';
 
   static void _showComingSoon(BuildContext context, String feature) {
     ScaffoldMessenger.of(context).showSnackBar(
