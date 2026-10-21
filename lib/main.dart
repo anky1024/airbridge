@@ -332,6 +332,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, refreshDialog) => AlertDialog(
           backgroundColor: cardColor,
+          scrollable: true,
           title: Text(_sendServer == null ? 'Selected files (${_sharedFiles.length})' : 'Files ready to download'),
           content: SizedBox(
             width: double.maxFinite,
@@ -623,6 +624,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
           _refreshReceiverDialog = refreshDialog;
           return AlertDialog(
           backgroundColor: cardColor,
+          scrollable: true,
           title: const Text('Receive files'),
           content: SizedBox(
             width: double.maxFinite,
@@ -713,14 +715,6 @@ async function upload(){
 }
 </script></body></html>''';
 
-  static void _showComingSoon(BuildContext context, String feature) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('$feature will be available in the next step.'),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
 }
 
 
