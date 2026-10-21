@@ -41,6 +41,7 @@ class AirBridgeHomePage extends StatefulWidget {
 class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   HttpServer? _receiveServer;
   String? _receiveUrl;
+  VoidCallback? _refreshReceiverDialog;
   final List<String> _receivedFiles = [];
 
   static const Color teal = Color(0xFF20D6C7);
@@ -400,6 +401,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             ));
             if (mounted) {
               setState(() => _receivedFiles.add(target.uri.pathSegments.last));
+              _refreshReceiverDialog?.call();
             }
             request.response
               ..statusCode = HttpStatus.ok
@@ -434,7 +436,9 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, refreshDialog) => AlertDialog(
+        builder: (dialogContext, refreshDialog) {
+          _refreshReceiverDialog = refreshDialog;
+          return AlertDialog(
           backgroundColor: cardColor,
           title: const Text('Receive files'),
           content: SizedBox(
@@ -487,6 +491,8 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             ),
           ],
         ),
+          );
+        },
       ),
     );
   }
