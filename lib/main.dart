@@ -41,7 +41,7 @@ class AirBridgeHomePage extends StatefulWidget {
 class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   HttpServer? _receiveServer;
   String? _receiveUrl;
-  VoidCallback? _refreshReceiverDialog;
+  StateSetter? _refreshReceiverDialog;
   final List<String> _receivedFiles = [];
 
   static const Color teal = Color(0xFF20D6C7);
@@ -314,7 +314,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             child: ListView.separated(
               shrinkWrap: true,
               itemCount: files.length,
-              separatorBuilder: (_, __) => const Divider(color: Colors.white12),
+              separatorBuilder: (_, _) => const Divider(color: Colors.white12),
               itemBuilder: (context, index) {
                 final file = files[index];
                 final size = file.size < 1024
@@ -401,7 +401,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             ));
             if (mounted) {
               setState(() => _receivedFiles.add(target.uri.pathSegments.last));
-              _refreshReceiverDialog?.call();
+              _refreshReceiverDialog?.call(() {});
             }
             request.response
               ..statusCode = HttpStatus.ok
@@ -423,6 +423,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
         }
       });
 
+      if (!context.mounted) return;
       await _showReceiverDialog(context);
     } catch (error) {
       if (!context.mounted) return;
@@ -490,7 +491,6 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
               child: const Text('Done'),
             ),
           ],
-        ),
           );
         },
       ),
