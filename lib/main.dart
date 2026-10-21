@@ -3,6 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 void main() {
   runApp(const AirBridgeApp());
@@ -227,7 +230,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 subtitle: 'Scan a code to connect devices quickly',
                 color: const Color(0xFFFFC66D),
                 onTap: () {
-                  _showComingSoon(context, 'QR connection');
+                  _scanQr(context);
                 },
               ),
 
@@ -358,8 +361,14 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                   const Text('On the receiving device, open this address in a browser on the same Wi-Fi:'),
                   const SizedBox(height: 10),
                   SelectableText(_sendUrl ?? '', style: const TextStyle(color: teal, fontWeight: FontWeight.bold)),
+                  if (_sendUrl != null) ...[
+                    const SizedBox(height: 16),
+                    Center(child: _qrCode(_sendUrl!)),
+                    const SizedBox(height: 8),
+                    const Center(child: Text('Scan this code on the receiving device', style: TextStyle(color: Colors.white60, fontSize: 12))),
+                  ],
                   const SizedBox(height: 10),
-                  const Text('The receiver can tap each file to download it. Keep AirBridge open while sharing.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  const Text('The receiver can scan the code or open the address in a browser on the same Wi-Fi. Keep AirBridge open while sharing.', style: TextStyle(color: Colors.white60, fontSize: 12)),
                 ],
               ],
             ),
@@ -457,6 +466,59 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     } catch (error) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not start sharing: $error')));
+      }
+    }
+  }
+
+
+  Widget _qrCode(String data) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(14)),
+      child: QrImageView(
+        data: data,
+        version: QrVersions.auto,
+        size: 180,
+        backgroundColor: Colors.white,
+        eyeStyle: const QrEyeStyle(eyeShape: QrEyeShape.square, color: Color(0xFF0B1220)),
+        dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Color(0xFF0B1220)),
+      ),
+    );
+  }
+
+  Future<void> _scanQr(BuildContext context) async {
+    final scanned = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(builder: (_) => const _QrScannerPage()),
+    );
+    if (!mounted || scanned == null) return;
+    final uri = Uri.tryParse(scanned.trim());
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That QR code is not a valid AirBridge sharing address.')),
+      );
+      return;
+    }
+    final shouldOpen = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: cardColor,
+        title: const Text('Open sharing address?'),
+        content: SelectableText(uri.toString(), style: const TextStyle(color: teal)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Open')),
+        ],
+      ),
+    );
+    if (shouldOpen != true) return;
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open that address.')));
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open address: $error')));
       }
     }
   }
@@ -576,9 +638,15 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                   _receiveUrl ?? '',
                   style: const TextStyle(color: teal, fontWeight: FontWeight.bold),
                 ),
+                if (_receiveUrl != null) ...[
+                  const SizedBox(height: 16),
+                  Center(child: _qrCode(_receiveUrl!)),
+                  const SizedBox(height: 8),
+                  const Center(child: Text('Scan this code on the sending device', style: TextStyle(color: Colors.white60, fontSize: 12))),
+                ],
                 const SizedBox(height: 10),
                 const Text(
-                  'Keep AirBridge open while receiving. Only use this on a trusted Wi-Fi network.',
+                  'Scan the code with AirBridge or open the address in a browser on the same Wi-Fi. Keep AirBridge open while receiving. Only use this on a trusted Wi-Fi network.',
                   style: TextStyle(color: Colors.white60, fontSize: 12),
                 ),
                 const SizedBox(height: 14),
@@ -650,6 +718,62 @@ async function upload(){
       SnackBar(
         content: Text('$feature will be available in the next step.'),
         behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+}
+
+
+class _QrScannerPage extends StatefulWidget {
+  const _QrScannerPage();
+
+  @override
+  State<_QrScannerPage> createState() => _QrScannerPageState();
+}
+
+class _QrScannerPageState extends State<_QrScannerPage> {
+  bool _handled = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Scan AirBridge QR'), backgroundColor: const Color(0xFF0B1220)),
+      body: Stack(
+        children: [
+          MobileScanner(
+            onDetect: (capture) {
+              if (_handled) return;
+              for (final barcode in capture.barcodes) {
+                final value = barcode.rawValue;
+                if (value != null && value.trim().isNotEmpty) {
+                  _handled = true;
+                  Navigator.of(context).pop(value.trim());
+                  return;
+                }
+              }
+            },
+          ),
+          Center(
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                border: Border.all(color: const Color(0xFF20D6C7), width: 3),
+                borderRadius: BorderRadius.circular(22),
+              ),
+            ),
+          ),
+          const Positioned(
+            left: 24,
+            right: 24,
+            bottom: 44,
+            child: Text(
+              'Point your camera at the QR code shown on the other device.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 14, shadows: [Shadow(color: Colors.black, blurRadius: 8)]),
+            ),
+          ),
+        ],
       ),
     );
   }
