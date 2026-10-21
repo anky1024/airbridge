@@ -12,10 +12,11 @@ permissions:
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source code
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Java
@@ -32,66 +33,17 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
-      - name: Check code
+      - name: Analyze Flutter code
         run: flutter analyze
 
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: AirBridge-Android-APK
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
-
-This workflow will:
-- Use a cloud machine to build the app.
-- Check your Dart code with `flutter analyze`.
-- Generate a release APK.
-- Make the APK available to download from GitHub Actions.
-
-**Note:** This uses Java 17, which is suitable for many Flutter Android projects. If your Android Gradle Plugin requires a newer Java version, we can adjust the workflow based on your project's configuration.
-
-## Step 4: Run the workflow
-
-After committing and pushing the workflow file:
-
-1. Open your GitHub repository.
-2. Click the **Actions** tab.
-3. Select **Build AirBridge APK**.
-4. Click **Run workflow**, select the `main` branch, and run it.
-5. Wait for the build to finish successfully.
-
-## Step 5: Download your installer APK
-
-Once the workflow succeeds:
-
-1. Open the completed workflow run.
-2. Scroll to **Artifacts**.
-3. Download `AirBridge-Android-APK`.
-4. Extract the downloaded ZIP file.
-5. Find `app-release.apk`.
-
-Transfer that APK to your OPPO phone, open it, and follow Android's installation prompts. You may need to allow installation from that file manager or browser.
-
-The first installation might be flagged as coming from an unknown source because the APK isn't distributed through the Play Store.
-
----
-
-### One important thing about AirBridge
-
-Your current app has the home screen and placeholder buttons. **This workflow will build the app as it currently exists; it won't implement file transfers automatically.**
-
-We can build an installer now and improve the app afterward.
-
-### Tell me one thing so I can guide you correctly:
-
-**Is your AirBridge project already uploaded to GitHub?**
-
-**A.** Yes, it's already on GitHub.  
-**B.** No, the project is only on my PC.  
-**C.** I have a GitHub account, but I don't know how to upload the project.
-
-Reply with **A, B, or C**, and we'll continue step by step.
+```
