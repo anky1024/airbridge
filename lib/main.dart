@@ -496,7 +496,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     final scanned = await Navigator.of(context).push<String>(
       MaterialPageRoute<String>(builder: (_) => const _QrScannerPage()),
     );
-    if (!mounted || scanned == null) return;
+    if (!context.mounted || scanned == null) return;
     final uri = Uri.tryParse(scanned.trim());
     if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -516,14 +516,14 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
         ],
       ),
     );
-    if (shouldOpen != true) return;
+    if (!context.mounted || shouldOpen != true) return;
     try {
       final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!opened && mounted) {
+      if (!opened && context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open that address.')));
       }
     } catch (error) {
-      if (mounted) {
+      if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open address: $error')));
       }
     }
