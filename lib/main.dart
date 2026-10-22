@@ -2,6 +2,8 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'dart:math';
 import 'package:path_provider/path_provider.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -22,11 +24,11 @@ class AirBridgeApp extends StatelessWidget {
       title: 'AirBridge',
       theme: ThemeData(
         useMaterial3: true,
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: const Color(0xFF0B1220),
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFF3F9FF),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF20D6C7),
-          brightness: Brightness.dark,
+          seedColor: const Color(0xFF38A9F5),
+          brightness: Brightness.light,
         ),
         fontFamily: 'Roboto',
       ),
@@ -51,8 +53,42 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   StateSetter? _refreshReceiverDialog;
   final List<String> _receivedFiles = [];
 
-  static const Color teal = Color(0xFF20D6C7);
-  static const Color cardColor = Color(0xFF151F30);
+  static const Color teal = Color(0xFF249DE8);
+  static const Color cardColor = Colors.white;
+  static const MethodChannel _shareChannel = MethodChannel('airbridge/share');
+  String _transferCode = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _shareChannel.setMethodCallHandler((call) async {
+      if (call.method == 'sharedFiles') await _acceptSharedFiles(call.arguments);
+    });
+    _loadInitialSharedFiles();
+  }
+
+  Future<void> _loadInitialSharedFiles() async {
+    try {
+      final files = await _shareChannel.invokeMethod<List<dynamic>>('getSharedFiles');
+      if (files != null && files.isNotEmpty) await _acceptSharedFiles(files);
+    } catch (_) {}
+  }
+
+  Future<void> _acceptSharedFiles(dynamic rawFiles) async {
+    if (rawFiles is! List) return;
+    final files = <PlatformFile>[];
+    for (final item in rawFiles) {
+      if (item is Map) {
+        final path = item['path']?.toString();
+        final name = item['name']?.toString() ?? 'Shared file';
+        final size = int.tryParse(item['size']?.toString() ?? '') ?? 0;
+        if (path != null && path.isNotEmpty) files.add(PlatformFile(name: name, size: size, path: path));
+      }
+    }
+    if (!mounted || files.isEmpty) return;
+    setState(() { _sharedFiles = files; _transferCode = (1000 + Random.secure().nextInt(9000)).toString(); });
+    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _showSendDialog(context); });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -97,7 +133,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                       Text(
                         'Share freely. Connect instantly.',
                         style: TextStyle(
-                          color: Colors.white60,
+                          color: Colors.black54,
                           fontSize: 12,
                         ),
                       ),
@@ -143,7 +179,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 decoration: BoxDecoration(
                   color: cardColor,
                   borderRadius: BorderRadius.circular(18),
-                  border: Border.all(color: Colors.white10),
+                  border: Border.all(color: Colors.black12),
                 ),
                 child: const Row(
                   children: [
@@ -168,7 +204,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                           Text(
                             'Connect both devices to the same Wi-Fi',
                             style: TextStyle(
-                              color: Colors.white54,
+                              color: Colors.black54,
                               fontSize: 11,
                             ),
                           ),
@@ -220,6 +256,16 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 onTap: () {
                   _startReceiving(context);
                 },
+              ),
+
+              const SizedBox(height: 14),
+
+              _ActionCard(
+                icon: Icons.radar_rounded,
+                title: 'Scan nearby devices',
+                subtitle: 'Look for AirBridge devices around you',
+                color: const Color(0xFF249DE8),
+                onTap: () => _showNearbyDevices(context),
               ),
 
               const SizedBox(height: 14),
@@ -291,7 +337,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 child: Text(
                   'AIRBRIDGE  •  PRIVATE FILE SHARING',
                   style: TextStyle(
-                    color: Colors.white30,
+                    color: Colors.black38,
                     fontSize: 10,
                     letterSpacing: 1.2,
                   ),
@@ -317,7 +363,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
         );
         return;
       }
-      setState(() => _sharedFiles = files);
+      setState(() { _sharedFiles = files; _transferCode = (1000 + Random.secure().nextInt(9000)).toString(); });
       await _showSendDialog(context);
     } catch (error) {
       if (!context.mounted) return;
@@ -342,7 +388,9 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (_sendServer == null) ...[
-                  const Text('Tap Start sharing, then let the other device open the address and download your files.'),
+                  Container(width: double.infinity, padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFFE8F5FF), borderRadius: BorderRadius.circular(16)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [const Text('YOUR TRANSFER CODE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.2, color: Color(0xFF47718F))), const SizedBox(height: 6), Text(_transferCode.isEmpty ? '----' : _transferCode, style: const TextStyle(fontSize: 34, letterSpacing: 8, fontWeight: FontWeight.bold, color: Color(0xFF167CC0))), const SizedBox(height: 4), const Text('Share this code with the receiving device.', style: TextStyle(fontSize: 12, color: Color(0xFF47718F)))])),
+                  const SizedBox(height: 14),
+                  const Text('Tap Start sharing to prepare your files. The receiver can use the address or QR code while both devices are on a reachable network.'),
                   const SizedBox(height: 12),
                   ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 220),
@@ -490,6 +538,12 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
         dataModuleStyle: const QrDataModuleStyle(dataModuleShape: QrDataModuleShape.square, color: Color(0xFF0B1220)),
       ),
     );
+  }
+
+  Future<void> _showNearbyDevices(BuildContext context) async {
+    final codeController = TextEditingController();
+    await showModalBottomSheet<void>(context: context, isScrollControlled: true, backgroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))), builder: (sheetContext) => Padding(padding: EdgeInsets.fromLTRB(24, 24, 24, MediaQuery.of(sheetContext).viewInsets.bottom + 28), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [const Center(child: Icon(Icons.radar_rounded, size: 42, color: Color(0xFF249DE8))), const SizedBox(height: 12), const Center(child: Text('Find a nearby device', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold))), const SizedBox(height: 8), const Text('Keep AirBridge open on both devices. Nearby discovery is being built; for now, enter the sender’s 4-digit code to prepare the receiving flow.', textAlign: TextAlign.center, style: TextStyle(color: Colors.black54, height: 1.5)), const SizedBox(height: 20), TextField(controller: codeController, keyboardType: TextInputType.number, maxLength: 4, textAlign: TextAlign.center, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 12), decoration: InputDecoration(labelText: '4-digit transfer code', counterText: '', filled: true, fillColor: const Color(0xFFF3F9FF), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)))), const SizedBox(height: 12), SizedBox(width: double.infinity, child: FilledButton(onPressed: () { final code = codeController.text.trim(); if (code.length != 4 || int.tryParse(code) == null) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter the 4-digit code shown on the sender’s phone.'))); return; } Navigator.pop(sheetContext); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Code captured. Automatic nearby connection is not available in this build yet.'))); }, child: const Padding(padding: EdgeInsets.all(14), child: Text('Continue')))])));
+    codeController.dispose();
   }
 
   Future<void> _scanQr(BuildContext context) async {
@@ -736,7 +790,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Scan AirBridge QR'), backgroundColor: const Color(0xFF0B1220)),
+      appBar: AppBar(title: const Text('Scan AirBridge QR'), backgroundColor: const Color(0xFFF3F9FF)),
       body: Stack(
         children: [
           MobileScanner(
@@ -757,7 +811,7 @@ class _QrScannerPageState extends State<_QrScannerPage> {
               width: 260,
               height: 260,
               decoration: BoxDecoration(
-                border: Border.all(color: const Color(0xFF20D6C7), width: 3),
+                border: Border.all(color: const Color(0xFF249DE8), width: 3),
                 borderRadius: BorderRadius.circular(22),
               ),
             ),
@@ -796,7 +850,7 @@ class _ActionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: const Color(0xFF151F30),
+      color: Colors.white,
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
