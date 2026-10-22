@@ -542,7 +542,79 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
 
   Future<void> _showNearbyDevices(BuildContext context) async {
     final codeController = TextEditingController();
-    await showModalBottomSheet<void>(context: context, isScrollControlled: true, backgroundColor: Colors.white, shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))), builder: (sheetContext) => Padding(padding: EdgeInsets.fromLTRB(24, 24, 24, MediaQuery.of(sheetContext).viewInsets.bottom + 28), child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [const Center(child: Icon(Icons.radar_rounded, size: 42, color: Color(0xFF249DE8))), const SizedBox(height: 12), const Center(child: Text('Find a nearby device', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold))), const SizedBox(height: 8), const Text('Keep AirBridge open on both devices. Nearby discovery is being built; for now, enter the sender’s 4-digit code to prepare the receiving flow.', textAlign: TextAlign.center, style: TextStyle(color: Colors.black54, height: 1.5)), const SizedBox(height: 20), TextField(controller: codeController, keyboardType: TextInputType.number, maxLength: 4, textAlign: TextAlign.center, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 12), decoration: InputDecoration(labelText: '4-digit transfer code', counterText: '', filled: true, fillColor: const Color(0xFFF3F9FF), border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)))), const SizedBox(height: 12), SizedBox(width: double.infinity, child: FilledButton(onPressed: () { final code = codeController.text.trim(); if (code.length != 4 || int.tryParse(code) == null) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter the 4-digit code shown on the sender’s phone.'))); return; } Navigator.pop(sheetContext); ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Code captured. Automatic nearby connection is not available in this build yet.'))); }, child: const Padding(padding: EdgeInsets.all(14), child: Text('Continue')))])));
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
+      ),
+      builder: (sheetContext) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          24,
+          24,
+          24,
+          MediaQuery.of(sheetContext).viewInsets.bottom + 28,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Center(
+              child: Icon(Icons.radar_rounded, size: 42, color: teal),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Connect to a nearby device',
+              style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Enter the 4-digit transfer code shown on the sending device. '
+              'Both devices must currently be reachable on the same local network.',
+              style: TextStyle(color: Colors.black54, height: 1.5),
+            ),
+            const SizedBox(height: 18),
+            TextField(
+              controller: codeController,
+              keyboardType: TextInputType.number,
+              maxLength: 4,
+              decoration: const InputDecoration(
+                labelText: '4-digit transfer code',
+                border: OutlineInputBorder(),
+                counterText: '',
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () {
+                  final code = codeController.text.trim();
+                  if (!RegExp(r'^\\d{4}$').hasMatch(code)) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Enter a valid 4-digit code.'),
+                      ),
+                    );
+                    return;
+                  }
+                  Navigator.of(sheetContext).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Code entered. Device discovery and code verification are not available yet.',
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('Continue'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
     codeController.dispose();
   }
 
