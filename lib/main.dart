@@ -26,9 +26,9 @@ class AirBridgeApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         brightness: Brightness.light,
-        scaffoldBackgroundColor: const Color(0xFFF3F9FF),
+        scaffoldBackgroundColor: const Color(0xFFE8F5FF),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF38A9F5),
+          seedColor: const Color(0xFF1599F5),
           brightness: Brightness.light,
         ),
         fontFamily: 'Roboto',
@@ -54,7 +54,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   StateSetter? _refreshReceiverDialog;
   final List<String> _receivedFiles = [];
 
-  static const Color teal = Color(0xFF249DE8);
+  static const Color teal = Color(0xFF078CE8);
   static const Color cardColor = Colors.white;
   static const MethodChannel _shareChannel = MethodChannel('airbridge/share');
   String _transferCode = '';
@@ -552,7 +552,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
         try {
           final data = jsonDecode(utf8.decode(packet!.data));
           if (data is Map && data['type'] == 'airbridge_offer') {
-            final host = data['host']?.toString() ?? packet!.address.address;
+            final host = data['host']?.toString() ?? packet.address.address;
             final port = int.tryParse(data['port']?.toString() ?? '') ?? 8766;
             final name = data['name']?.toString() ?? 'AirBridge device';
             found['http://$host:$port'] = {'url': 'http://$host:$port', 'name': name};
