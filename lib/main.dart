@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,7 +49,6 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   HttpServer? _receiveServer;
   String? _receiveUrl;
   HttpServer? _sendServer;
-  RawDatagramSocket? _discoverySocket;
   String? _sendUrl;
   List<PlatformFile> _sharedFiles = [];
   StateSetter? _refreshReceiverDialog;
