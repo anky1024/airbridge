@@ -116,7 +116,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                         width: 64,
                         height: 64,
                         decoration: BoxDecoration(
-                          color: teal.withOpacity(0.13),
+                          color: teal.withValues(alpha: 0.13),
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: const Icon(Icons.swap_horiz_rounded, color: teal, size: 34),
