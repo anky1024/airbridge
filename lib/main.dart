@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -48,6 +49,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   HttpServer? _receiveServer;
   String? _receiveUrl;
   HttpServer? _sendServer;
+  RawDatagramSocket? _discoverySocket;
   String? _sendUrl;
   List<PlatformFile> _sharedFiles = [];
   StateSetter? _refreshReceiverDialog;
@@ -436,6 +438,8 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
               TextButton(
                 onPressed: () async {
                   await _sendServer?.close(force: true);
+                  _discoverySocket?.close();
+                  _discoverySocket = null;
                   _sendServer = null;
                   _sendUrl = null;
                   if (dialogContext.mounted) Navigator.of(dialogContext).pop();
@@ -470,6 +474,27 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
       final server = await HttpServer.bind(InternetAddress.anyIPv4, 8766);
       _sendServer = server;
       _sendUrl = 'http://${addresses.first.address}:8766';
+      _discoverySocket?.close();
+      _discoverySocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 8767);
+      _discoverySocket!.broadcastEnabled = true;
+      _discoverySocket!.listen((event) {
+        if (event != RawSocketEvent.read) return;
+        Datagram? packet;
+        while ((packet = _discoverySocket!.receive()) != null) {
+          try {
+            final message = jsonDecode(utf8.decode(packet!.data));
+            if (message is Map && message['type'] == 'airbridge_discover') {
+              final offer = jsonEncode({
+                'type': 'airbridge_offer',
+                'host': addresses.first.address,
+                'port': 8766,
+                'name': 'AirBridge sender',
+              });
+              _discoverySocket!.send(utf8.encode(offer), packet!.address, packet!.port);
+            }
+          } catch (_) {}
+        }
+      });
       server.listen((request) async {
         try {
           if (request.method == 'GET' && request.uri.path == '/') {
@@ -590,6 +615,30 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 style: TextStyle(color: Colors.black54, height: 1.5),
               ),
               const SizedBox(height: 18),
+              OutlinedButton.icon(
+                onPressed: connecting ? null : () async {
+                  refreshSheet(() { connecting = true; status = 'Searching nearby…'; });
+                  try {
+                    final found = await _discoverSenders();
+                    if (!sheetContext.mounted) return;
+                    refreshSheet(() {
+                      connecting = false;
+                      if (found.isEmpty) {
+                        status = 'No sender found. Check that sharing is started and both phones are on the same network, or enter the address below.';
+                      } else {
+                        addressController.text = found.first['url']!;
+                        status = 'Found ${found.length} AirBridge device(s). Selected ${found.first['name']}.';
+                      }
+                    });
+                  } catch (error) {
+                    if (!sheetContext.mounted) return;
+                    refreshSheet(() { connecting = false; status = 'Search failed: $error'; });
+                  }
+                },
+                icon: const Icon(Icons.radar_rounded),
+                label: const Text('Scan nearby devices'),
+              ),
+              const SizedBox(height: 12),
               TextField(
                 controller: addressController,
                 keyboardType: TextInputType.url,
@@ -654,6 +703,41 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     );
     addressController.dispose();
     codeController.dispose();
+  }
+
+  Future<List<Map<String, String>>> _discoverSenders() async {
+    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    final found = <String, Map<String, String>>{};
+    final completer = Completer<List<Map<String, String>>>();
+    late StreamSubscription<RawSocketEvent> subscription;
+    subscription = socket.listen((event) {
+      if (event != RawSocketEvent.read) return;
+      Datagram? packet;
+      while ((packet = socket.receive()) != null) {
+        try {
+          final decoded = jsonDecode(utf8.decode(packet!.data));
+          if (decoded is Map && decoded['type'] == 'airbridge_offer') {
+            final host = decoded['host']?.toString() ?? packet!.address.address;
+            final port = int.tryParse(decoded['port']?.toString() ?? '') ?? 8766;
+            final name = decoded['name']?.toString() ?? 'AirBridge device';
+            final url = 'http://$host:$port';
+            found[url] = {'url': url, 'name': name};
+          }
+        } catch (_) {}
+      }
+    });
+    socket.broadcastEnabled = true;
+    socket.send(utf8.encode(jsonEncode({'type': 'airbridge_discover'})),
+        InternetAddress('255.255.255.255'), 8767);
+    Future<void>.delayed(const Duration(seconds: 4)).then((_) {
+      if (!completer.isCompleted) completer.complete(found.values.toList());
+    });
+    try {
+      return await completer.future;
+    } finally {
+      await subscription.cancel();
+      socket.close();
+    }
   }
 
   Future<List<String>> _receiveFromSender(Uri baseUri, String code) async {
