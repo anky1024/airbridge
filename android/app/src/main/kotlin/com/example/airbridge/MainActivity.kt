@@ -19,6 +19,7 @@ class MainActivity : FlutterActivity() {
         methodChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
                 "getSharedFiles" -> result.success(copyIncomingFiles(intent))
+                "getTileRequest" -> result.success(intent?.getBooleanExtra("open_receiver", false) == true)
                 else -> result.notImplemented()
             }
         }
@@ -29,6 +30,7 @@ class MainActivity : FlutterActivity() {
         setIntent(intent)
         val files = copyIncomingFiles(intent)
         if (files.isNotEmpty()) methodChannel?.invokeMethod("sharedFiles", files)
+        if (intent.getBooleanExtra("open_receiver", false)) methodChannel?.invokeMethod("openReceiver", null)
     }
 
     private fun copyIncomingFiles(sourceIntent: Intent?): List<Map<String, Any>> {
