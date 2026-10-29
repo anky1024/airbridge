@@ -65,8 +65,15 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     super.initState();
     _shareChannel.setMethodCallHandler((call) async {
       if (call.method == 'sharedFiles') await _acceptSharedFiles(call.arguments);
+      if (call.method == 'openReceiver' && mounted) await _showNearbyDevices(context);
     });
     _loadInitialSharedFiles();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final openReceiver = await _shareChannel.invokeMethod<bool>('getTileRequest') ?? false;
+        if (openReceiver && mounted) await _showNearbyDevices(context);
+      } catch (_) {}
+    });
   }
 
   Future<void> _loadInitialSharedFiles() async {
