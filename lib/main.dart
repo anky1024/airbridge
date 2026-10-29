@@ -756,6 +756,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
           final body = await utf8.decoder.bind(response).join();
           client.close(force: true);
           if (response.statusCode == HttpStatus.ok) {
+            if (!context.mounted) return;
             await _receiveFromSender(address, code, context);
             return;
           }
@@ -837,7 +838,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 : ListView.separated(
                     shrinkWrap: true,
                     itemCount: files.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    separatorBuilder: (_, _) => const Divider(height: 1),
                     itemBuilder: (itemContext, index) {
                       final item = files[index];
                       final name = item['name']?.toString() ?? 'Shared file';
