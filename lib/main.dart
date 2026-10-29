@@ -50,6 +50,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   String? _receiveUrl;
   HttpServer? _sendServer;
   String? _sendUrl;
+  RawDatagramSocket? _discoveryListener;
   List<PlatformFile> _sharedFiles = [];
   StateSetter? _refreshReceiverDialog;
   final List<String> _receivedFiles = [];
@@ -437,6 +438,8 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
               TextButton(
                 onPressed: () async {
                   await _sendServer?.close(force: true);
+                  _discoveryListener?.close();
+                  _discoveryListener = null;
                   _sendServer = null;
                   _sendUrl = null;
                   if (dialogContext.mounted) Navigator.of(dialogContext).pop();
@@ -530,6 +533,26 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
           }
         }
       });
+      try {
+        _discoveryListener?.close();
+        _discoveryListener = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 8767);
+        _discoveryListener!.listen((event) {
+          if (event != RawSocketEvent.read) return;
+          Datagram? packet;
+          while ((packet = _discoveryListener!.receive()) != null) {
+            try {
+              final data = jsonDecode(utf8.decode(packet!.data));
+              if (data is Map && data['type'] == 'airbridge_discover' && _sendUrl != null) {
+                final host = Uri.parse(_sendUrl!).host;
+                final offer = utf8.encode(jsonEncode({'type': 'airbridge_offer', 'host': host, 'port': 8766, 'name': 'AirBridge sender'}));
+                _discoveryListener!.send(offer, packet.address, packet.port);
+              }
+            } catch (_) {}
+          }
+        });
+      } catch (_) {
+        // Sharing can still work with the displayed address if discovery is unavailable.
+      }
       if (mounted) setState(() {});
     } catch (error) {
       if (context.mounted) {
