@@ -474,15 +474,33 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
         try {
           if (request.method == 'GET' && request.uri.path == '/') {
             request.response.headers.contentType = ContentType.html;
-            final rows = _sharedFiles.asMap().entries.map((entry) {
-              final name = const HtmlEscape().convert(entry.value.name);
-              return '<li><a href="/download?index=${entry.key}">Download $name</a> <small>(${_formatSize(entry.value.size)})</small></li>';
-            }).join('\n');
-            request.response.write('''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>AirBridge downloads</title><style>body{font-family:system-ui;background:#0b1220;color:#f5f7fb;max-width:620px;margin:40px auto;padding:20px}main{background:#151f30;border:1px solid #2b394d;border-radius:18px;padding:24px}h1{color:#20d6c7}a{color:#20d6c7;line-height:2}</style></head><body><main><h1>AirBridge</h1><h2>Download shared files</h2><p>Tap a file below to download it to this device.</p><ul>$rows</ul></main></body></html>''');
+            request.response.write('''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>AirBridge</title><style>body{font-family:system-ui;background:#f3f9ff;color:#142b3b;max-width:620px;margin:40px auto;padding:20px}main{background:white;border:1px solid #d8eafa;border-radius:18px;padding:24px}button,input{font:inherit;padding:12px;border-radius:10px;border:1px solid #b7d8ef}button{background:#249de8;color:white;border:0}#files{line-height:2}</style></head><body><main><h1>AirBridge</h1><h2>Receive shared files</h2><p>Enter the 4-digit code shown on the sending phone.</p><input id="code" inputmode="numeric" maxlength="4" placeholder="4-digit code"><button onclick="loadFiles()">Verify code</button><p id="status"></p><ul id="files"></ul><script>async function loadFiles(){const code=document.getElementById('code').value;const status=document.getElementById('status');const list=document.getElementById('files');list.innerHTML='';try{const r=await fetch('/verify?code='+encodeURIComponent(code));if(!r.ok)throw new Error(r.status===403?'Incorrect code':'Could not verify code');const data=await r.json();for(const f of data.files){const li=document.createElement('li');const a=document.createElement('a');a.href='/download?index='+f.index+'&code='+encodeURIComponent(code);a.textContent='Download '+f.name;li.appendChild(a);list.appendChild(li)}status.textContent='Code accepted. Choose a file to download.'}catch(e){status.textContent=e.message}}</script></main></body></html>''');
+            await request.response.close();
+            return;
+          }
+          if (request.method == 'GET' && request.uri.path == '/verify') {
+            if (request.uri.queryParameters['code'] != _transferCode) {
+              request.response.statusCode = HttpStatus.forbidden;
+              request.response.write('Incorrect transfer code');
+              await request.response.close();
+              return;
+            }
+            final files = _sharedFiles.asMap().entries.map((entry) => {
+              'index': entry.key,
+              'name': entry.value.name,
+              'size': entry.value.size,
+            }).toList();
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode({'files': files}));
             await request.response.close();
             return;
           }
           if (request.method == 'GET' && request.uri.path == '/download') {
+            if (request.uri.queryParameters['code'] != _transferCode) {
+              request.response.statusCode = HttpStatus.forbidden;
+              await request.response.close();
+              return;
+            }
             final index = int.tryParse(request.uri.queryParameters['index'] ?? '');
             if (index == null || index < 0 || index >= _sharedFiles.length) {
               request.response.statusCode = HttpStatus.notFound;
@@ -496,7 +514,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
               await request.response.close();
               return;
             }
-            final safeName = picked.name.replaceAll('"', '').replaceAll('\r', '').replaceAll('\n', '');
+            final safeName = picked.name.replaceAll('"', '').replaceAll('\\r', '').replaceAll('\\n', '');
             request.response.headers
               ..set(HttpHeaders.contentTypeHeader, 'application/octet-stream')
               ..set('Content-Disposition', 'attachment; filename="$safeName"')
@@ -512,7 +530,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             request.response.statusCode = HttpStatus.internalServerError;
             await request.response.close();
           } catch (_) {
-            // The response may already have been closed after a client disconnect.
+            // The response may already be closed after a client disconnect.
           }
         }
       });
@@ -541,7 +559,10 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   }
 
   Future<void> _showNearbyDevices(BuildContext context) async {
+    final addressController = TextEditingController();
     final codeController = TextEditingController();
+    bool connecting = false;
+    String? status;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -549,73 +570,151 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
       ),
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          24,
-          24,
-          24,
-          MediaQuery.of(sheetContext).viewInsets.bottom + 28,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Center(
-              child: Icon(Icons.radar_rounded, size: 42, color: teal),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Connect to a nearby device',
-              style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Enter the 4-digit transfer code shown on the sending device. '
-              'Both devices must currently be reachable on the same local network.',
-              style: TextStyle(color: Colors.black54, height: 1.5),
-            ),
-            const SizedBox(height: 18),
-            TextField(
-              controller: codeController,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              decoration: const InputDecoration(
-                labelText: '4-digit transfer code',
-                border: OutlineInputBorder(),
-                counterText: '',
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, refreshSheet) => Padding(
+          padding: EdgeInsets.fromLTRB(
+            24, 24, 24, MediaQuery.of(sheetContext).viewInsets.bottom + 28,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Center(child: Icon(Icons.radar_rounded, size: 42, color: teal)),
+              const SizedBox(height: 16),
+              const Text('Connect to a nearby device',
+                style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              const Text(
+                'On the sending phone, tap Start sharing. Enter the address and '
+                '4-digit code shown there. Both phones must be reachable on the same network.',
+                style: TextStyle(color: Colors.black54, height: 1.5),
               ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () {
-                  final code = codeController.text.trim();
-                  if (!RegExp(r'^\\d{4}$').hasMatch(code)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Enter a valid 4-digit code.'),
-                      ),
-                    );
-                    return;
-                  }
-                  Navigator.of(sheetContext).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Code entered. Device discovery and code verification are not available yet.',
-                      ),
-                    ),
-                  );
-                },
-                child: const Text('Continue'),
+              const SizedBox(height: 18),
+              TextField(
+                controller: addressController,
+                keyboardType: TextInputType.url,
+                autocorrect: false,
+                decoration: const InputDecoration(
+                  labelText: 'Sender address',
+                  hintText: 'http://192.168.1.6:8766',
+                  border: OutlineInputBorder(),
+                ),
               ),
-            ),
-          ],
+              const SizedBox(height: 12),
+              TextField(
+                controller: codeController,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                decoration: const InputDecoration(
+                  labelText: '4-digit transfer code',
+                  border: OutlineInputBorder(),
+                  counterText: '',
+                ),
+              ),
+              if (status != null) ...[
+                const SizedBox(height: 8),
+                Text(status!, style: const TextStyle(color: Colors.black54)),
+              ],
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: connecting ? null : () async {
+                    final address = addressController.text.trim();
+                    final code = codeController.text.trim();
+                    final uri = Uri.tryParse(address);
+                    if (uri == null || !['http', 'https'].contains(uri.scheme) ||
+                        uri.host.isEmpty || !RegExp(r'^\\d{4}$').hasMatch(code)) {
+                      refreshSheet(() => status = 'Enter a valid sender address and 4-digit code.');
+                      return;
+                    }
+                    refreshSheet(() { connecting = true; status = 'Checking code and looking for files…'; });
+                    try {
+                      final result = await _receiveFromSender(uri, code);
+                      if (!sheetContext.mounted) return;
+                      refreshSheet(() {
+                        connecting = false;
+                        status = 'Received ${result.length} file(s): ${result.join(', ')}';
+                      });
+                    } catch (error) {
+                      if (!sheetContext.mounted) return;
+                      refreshSheet(() {
+                        connecting = false;
+                        status = 'Could not connect: $error';
+                      });
+                    }
+                  },
+                  child: Text(connecting ? 'Connecting…' : 'Verify code and receive'),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
+    addressController.dispose();
     codeController.dispose();
+  }
+
+  Future<List<String>> _receiveFromSender(Uri baseUri, String code) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
+    final base = baseUri.replace(path: '', query: null, fragment: null);
+    try {
+      final verifyUri = base.replace(
+        path: '/verify',
+        queryParameters: {'code': code},
+      );
+      final verifyRequest = await client.getUrl(verifyUri);
+      final verifyResponse = await verifyRequest.close();
+      final verifyBody = await utf8.decoder.bind(verifyResponse).join();
+      if (verifyResponse.statusCode != HttpStatus.ok) {
+        throw Exception(verifyResponse.statusCode == HttpStatus.forbidden
+            ? 'The transfer code is incorrect.'
+            : 'Sender did not accept the request (HTTP ${verifyResponse.statusCode}).');
+      }
+      final decoded = jsonDecode(verifyBody);
+      if (decoded is! Map || decoded['files'] is! List) {
+        throw Exception('The sender returned an invalid file list.');
+      }
+      final files = decoded['files'] as List;
+      if (files.isEmpty) throw Exception('The sender has no files to share.');
+      final directory = await getApplicationDocumentsDirectory();
+      final receivedNames = <String>[];
+      for (final item in files) {
+        if (item is! Map) continue;
+        final index = int.tryParse(item['index'].toString());
+        if (index == null || index < 0) continue;
+        final rawName = item['name']?.toString() ?? 'received_file';
+        final safeName = rawName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').replaceAll('..', '_');
+        final downloadUri = base.replace(
+          path: '/download',
+          queryParameters: {'index': '$index', 'code': code},
+        );
+        final downloadRequest = await client.getUrl(downloadUri);
+        final downloadResponse = await downloadRequest.close();
+        if (downloadResponse.statusCode != HttpStatus.ok) {
+          await downloadResponse.drain<void>();
+          throw Exception('Failed to download $safeName (HTTP ${downloadResponse.statusCode}).');
+        }
+        var target = File('${directory.path}/$safeName');
+        var count = 1;
+        while (await target.exists()) {
+          final dot = safeName.lastIndexOf('.');
+          final name = dot > 0 ? safeName.substring(0, dot) : safeName;
+          final extension = dot > 0 ? safeName.substring(dot) : '';
+          target = File('${directory.path}/${name}_$count$extension');
+          count++;
+        }
+        final sink = target.openWrite();
+        await downloadResponse.pipe(sink);
+        receivedNames.add(target.uri.pathSegments.last);
+        if (mounted) setState(() => _receivedFiles.add(target.uri.pathSegments.last));
+      }
+      if (receivedNames.isEmpty) throw Exception('No files were downloaded.');
+      return receivedNames;
+    } finally {
+      client.close(force: true);
+    }
   }
 
   Future<void> _scanQr(BuildContext context) async {
