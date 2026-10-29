@@ -492,6 +492,11 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             return;
           }
           if (request.method == 'GET' && request.uri.path == '/download') {
+            if (request.uri.queryParameters['code'] != _transferCode) {
+              request.response.statusCode = HttpStatus.forbidden;
+              await request.response.close();
+              return;
+            }
             final index = int.tryParse(request.uri.queryParameters['index'] ?? '');
             if (index == null || index < 0 || index >= _sharedFiles.length) {
               request.response.statusCode = HttpStatus.notFound;
