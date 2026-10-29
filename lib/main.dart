@@ -48,6 +48,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   HttpServer? _receiveServer;
   String? _receiveUrl;
   HttpServer? _sendServer;
+  RawDatagramSocket? _discoverySocket;
   String? _sendUrl;
   List<PlatformFile> _sharedFiles = [];
   StateSetter? _refreshReceiverDialog;
@@ -63,6 +64,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     super.initState();
     _shareChannel.setMethodCallHandler((call) async {
       if (call.method == 'sharedFiles') await _acceptSharedFiles(call.arguments);
+      if (call.method == 'openReceiver' && mounted) await _showNearbyDevices(context);
     });
     _loadInitialSharedFiles();
   }
@@ -87,7 +89,8 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     }
     if (!mounted || files.isEmpty) return;
     setState(() { _sharedFiles = files; _transferCode = (1000 + Random.secure().nextInt(9000)).toString(); });
-    WidgetsBinding.instance.addPostFrameCallback((_) { if (mounted) _showSendDialog(context); });
+    await _startSharing(context);
+    if (mounted) await _showSendDialog(context);
   }
 
   @override
@@ -157,7 +160,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 style: TextStyle(
                   fontSize: 14,
                   height: 1.6,
-                  color: Colors.white60,
+                  color: Colors.black54,
                 ),
               ),
 
@@ -219,7 +222,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                   fontSize: 11,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 2,
-                  color: Colors.white54,
+                  color: Colors.black45,
                 ),
               ),
 
@@ -267,9 +270,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                 title: 'Connect with QR',
                 subtitle: 'Scan a code to connect devices quickly',
                 color: const Color(0xFFFFC66D),
-                onTap: () {
-                  _scanQr(context);
-                },
+                onTap: () => _showNearbyDevices(context),
               ),
 
               const SizedBox(height: 28),
@@ -392,7 +393,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                         contentPadding: EdgeInsets.zero,
                         leading: const Icon(Icons.insert_drive_file_outlined, color: teal),
                         title: Text(_sharedFiles[index].name, maxLines: 2, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(_formatSize(_sharedFiles[index].size), style: const TextStyle(color: Colors.white54)),
+                        subtitle: Text(_formatSize(_sharedFiles[index].size), style: const TextStyle(color: Colors.black54)),
                       ),
                     ),
                   ),
@@ -463,6 +464,14 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
       _sendUrl = 'http://${addresses.first.address}:8766';
       server.listen((request) async {
         try {
+          if (request.method == 'GET' && request.uri.path == '/verify') {
+            final valid = request.uri.queryParameters['code'] == _transferCode;
+            request.response.statusCode = valid ? HttpStatus.ok : HttpStatus.forbidden;
+            request.response.headers.contentType = ContentType.json;
+            request.response.write(jsonEncode(valid ? {'files': _sharedFiles.map((file) => {'name': file.name, 'size': file.size}).toList()} : {'error': 'Invalid transfer code'}));
+            await request.response.close();
+            return;
+          }
           if (request.method == 'GET' && request.uri.path == '/') {
             request.response.headers.contentType = ContentType.html;
             final rows = _sharedFiles.asMap().entries.map((entry) {
@@ -531,82 +540,125 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     );
   }
 
+  Future<List<Map<String, String>>> _discoverSenders() async {
+    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    final found = <String, Map<String, String>>{};
+    final done = Completer<List<Map<String, String>>>();
+    late StreamSubscription<RawSocketEvent> subscription;
+    subscription = socket.listen((event) {
+      if (event != RawSocketEvent.read) return;
+      Datagram? packet;
+      while ((packet = socket.receive()) != null) {
+        try {
+          final data = jsonDecode(utf8.decode(packet!.data));
+          if (data is Map && data['type'] == 'airbridge_offer') {
+            final host = data['host']?.toString() ?? packet!.address.address;
+            final port = int.tryParse(data['port']?.toString() ?? '') ?? 8766;
+            final name = data['name']?.toString() ?? 'AirBridge device';
+            found['http://$host:$port'] = {'url': 'http://$host:$port', 'name': name};
+          }
+        } catch (_) {}
+      }
+    });
+    socket.broadcastEnabled = true;
+    socket.send(utf8.encode(jsonEncode({'type': 'airbridge_discover'})), InternetAddress('255.255.255.255'), 8767);
+    Future<void>.delayed(const Duration(seconds: 4)).then((_) { if (!done.isCompleted) done.complete(found.values.toList()); });
+    try { return await done.future; } finally { await subscription.cancel(); socket.close(); }
+  }
+
   Future<void> _showNearbyDevices(BuildContext context) async {
     final codeController = TextEditingController();
+    final addressController = TextEditingController();
+    var scanning = false;
+    var status = 'Scan for a sender first. If needed, enter its address manually.';
+    var found = <Map<String, String>>[];
     await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(26)),
-      ),
-      builder: (sheetContext) => Padding(
-        padding: EdgeInsets.fromLTRB(
-          24,
-          24,
-          24,
-          MediaQuery.of(sheetContext).viewInsets.bottom + 28,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Center(
-              child: Icon(Icons.radar_rounded, size: 42, color: teal),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              'Connect to a nearby device',
-              style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Enter the 4-digit transfer code shown on the sending device. '
-              'Both devices must currently be reachable on the same local network.',
-              style: TextStyle(color: Colors.black54, height: 1.5),
-            ),
-            const SizedBox(height: 18),
-            TextField(
-              controller: codeController,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              decoration: const InputDecoration(
-                labelText: '4-digit transfer code',
-                border: OutlineInputBorder(),
-                counterText: '',
-              ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () {
-                  final code = codeController.text.trim();
-                  if (!RegExp(r'^\\d{4}$').hasMatch(code)) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Enter a valid 4-digit code.'),
-                      ),
-                    );
-                    return;
-                  }
-                  Navigator.of(sheetContext).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                        'Code entered. Device discovery and code verification are not available yet.',
-                      ),
-                    ),
-                  );
-                },
-                child: const Text('Continue'),
-              ),
-            ),
-          ],
-        ),
-      ),
+      context: context, isScrollControlled: true, backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+      builder: (sheetContext) => StatefulBuilder(builder: (sheetContext, refresh) => Padding(
+        padding: EdgeInsets.fromLTRB(24, 24, 24, MediaQuery.of(sheetContext).viewInsets.bottom + 28),
+        child: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Center(child: Icon(Icons.radar_rounded, size: 42, color: teal)),
+          const SizedBox(height: 16),
+          const Text('Connect to a nearby device', style: TextStyle(fontSize: 21, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          const Text('AirBridge searches nearby senders first. Both phones must be reachable on the same network in this version.', style: TextStyle(color: Colors.black54, height: 1.5)),
+          const SizedBox(height: 16),
+          SizedBox(width: double.infinity, child: FilledButton.icon(
+            onPressed: scanning ? null : () async {
+              refresh(() { scanning = true; status = 'Searching for AirBridge senders…'; });
+              try {
+                final devices = await _discoverSenders();
+                if (!sheetContext.mounted) return;
+                refresh(() {
+                  scanning = false; found = devices;
+                  if (devices.isEmpty) { status = 'No sender found. Start sharing on the other phone and try again.'; }
+                  else { addressController.text = devices.first['url']!; status = 'Found ${devices.length} device(s). Selected ${devices.first['name']}.'; }
+                });
+              } catch (error) {
+                if (!sheetContext.mounted) return;
+                refresh(() { scanning = false; status = 'Scan failed: $error'; });
+              }
+            },
+            icon: scanning ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.radar_rounded),
+            label: Text(scanning ? 'Scanning…' : 'Scan nearby devices'),
+          )),
+          const SizedBox(height: 10),
+          Text(status, style: const TextStyle(color: Colors.black54, height: 1.4)),
+          if (found.isNotEmpty) ...found.map((device) => ListTile(
+            contentPadding: EdgeInsets.zero, leading: const Icon(Icons.phone_android_rounded, color: teal),
+            title: Text(device['name'] ?? 'AirBridge device'), subtitle: Text(device['url'] ?? ''),
+            onTap: () => addressController.text = device['url'] ?? '',
+          )),
+          const SizedBox(height: 12),
+          TextField(controller: addressController, keyboardType: TextInputType.url, decoration: const InputDecoration(labelText: 'Sender address (optional)', hintText: 'http://192.168.1.6:8766', border: OutlineInputBorder())),
+          const SizedBox(height: 12),
+          TextField(controller: codeController, keyboardType: TextInputType.number, maxLength: 4, decoration: const InputDecoration(labelText: '4-digit transfer code', border: OutlineInputBorder(), counterText: '')),
+          const SizedBox(height: 10),
+          SizedBox(width: double.infinity, child: FilledButton(onPressed: () async {
+            final code = codeController.text.trim();
+            final base = Uri.tryParse(addressController.text.trim());
+            if (!RegExp(r'^\d{4}$').hasMatch(code)) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a valid 4-digit code.'))); return;
+            }
+            if (base == null || base.host.isEmpty || !['http', 'https'].contains(base.scheme)) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Scan nearby devices or enter a valid sender address.'))); return;
+            }
+            Navigator.of(sheetContext).pop();
+            await _receiveFromSender(base, code, context);
+          }, child: const Text('Connect and receive'))),
+          Align(alignment: Alignment.center, child: TextButton.icon(onPressed: () { Navigator.of(sheetContext).pop(); _scanQr(context); }, icon: const Icon(Icons.qr_code_scanner_rounded), label: const Text('Use QR code instead'))),
+        ])),
+      )),
     );
-    codeController.dispose();
+    codeController.dispose(); addressController.dispose();
+  }
+
+  Future<void> _receiveFromSender(Uri base, String code, BuildContext context) async {
+    try {
+      final client = HttpClient();
+      final verifyRequest = await client.getUrl(base.replace(path: '/verify', queryParameters: {'code': code}));
+      final verifyResponse = await verifyRequest.close();
+      final body = await utf8.decoder.bind(verifyResponse).join();
+      if (verifyResponse.statusCode != HttpStatus.ok) throw Exception('The code was not accepted. Check it and try again.');
+      final decoded = jsonDecode(body);
+      if (decoded is! Map || decoded['files'] is! List) throw Exception('Sender returned an invalid file list.');
+      final directory = await getApplicationDocumentsDirectory();
+      var count = 0;
+      final files = decoded['files'] as List;
+      for (var i = 0; i < files.length; i++) {
+        final item = files[i]; if (item is! Map) continue;
+        final name = (item['name']?.toString() ?? 'received_file').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').replaceAll('..', '_');
+        final request = await client.getUrl(base.replace(path: '/download', queryParameters: {'index': '$i', 'code': code}));
+        final response = await request.close(); if (response.statusCode != HttpStatus.ok) continue;
+        final target = File('${directory.path}/$name'); final sink = target.openWrite();
+        await response.pipe(sink); _receivedFiles.add(target.path); count++;
+      }
+      client.close(force: true);
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Received $count file(s). Saved inside AirBridge storage.')));
+    } catch (error) {
+      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not receive files: $error')));
+    }
   }
 
   Future<void> _scanQr(BuildContext context) async {
