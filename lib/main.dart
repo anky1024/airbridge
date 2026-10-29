@@ -784,6 +784,143 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
     }
   }
 
+  Future<void> _receiveFromSender(Uri base, String code, BuildContext context) async {
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(
+        base.replace(path: '/verify', queryParameters: {'code': code}),
+      );
+      final response = await request.close();
+      final body = await utf8.decoder.bind(response).join();
+      if (response.statusCode != HttpStatus.ok) {
+        throw Exception('The code was not accepted. Check it and try again.');
+      }
+      final decoded = jsonDecode(body);
+      if (decoded is! Map || decoded['files'] is! List) {
+        throw Exception('The sender returned an invalid file list.');
+      }
+      final files = (decoded['files'] as List)
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+      if (context.mounted) {
+        await _showAvailableFiles(base, code, files, context);
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not connect: $error')),
+        );
+      }
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> _showAvailableFiles(
+    Uri base,
+    String code,
+    List<Map<String, dynamic>> files,
+    BuildContext context,
+  ) async {
+    final downloaded = <int>{};
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, refresh) => AlertDialog(
+          backgroundColor: Colors.white,
+          title: Text('Files available (${files.length})'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: files.isEmpty
+                ? const Text('No files are being shared.')
+                : ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: files.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (itemContext, index) {
+                      final item = files[index];
+                      final name = item['name']?.toString() ?? 'Shared file';
+                      final size = int.tryParse(item['size']?.toString() ?? '') ?? 0;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(
+                          Icons.insert_drive_file_outlined,
+                          color: Color(0xFF078CE8),
+                        ),
+                        title: Text(name, maxLines: 2, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(_formatSize(size)),
+                        trailing: downloaded.contains(index)
+                            ? const Icon(Icons.check_circle, color: Colors.green)
+                            : IconButton(
+                                tooltip: 'Download file',
+                                icon: const Icon(Icons.download_rounded, color: Color(0xFF078CE8)),
+                                onPressed: () async {
+                                  try {
+                                    await _downloadSingleFile(base, code, index, name);
+                                    refresh(() => downloaded.add(index));
+                                    if (itemContext.mounted) {
+                                      ScaffoldMessenger.of(itemContext).showSnackBar(
+                                        SnackBar(content: Text('Downloaded $name')),
+                                      );
+                                    }
+                                  } catch (error) {
+                                    if (itemContext.mounted) {
+                                      ScaffoldMessenger.of(itemContext).showSnackBar(
+                                        SnackBar(content: Text('Download failed: $error')),
+                                      );
+                                    }
+                                  }
+                                },
+                              ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _downloadSingleFile(
+    Uri base,
+    String code,
+    int index,
+    String rawName,
+  ) async {
+    final client = HttpClient();
+    try {
+      final request = await client.getUrl(
+        base.replace(
+          path: '/download',
+          queryParameters: {'index': '$index', 'code': code},
+        ),
+      );
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) {
+        await utf8.decoder.bind(response).join();
+        throw Exception('The sender rejected the download.');
+      }
+      final directory = await getApplicationDocumentsDirectory();
+      final name = rawName
+          .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+          .replaceAll('..', '_');
+      final target = File('${directory.path}/$name');
+      final sink = target.openWrite();
+      await response.pipe(sink);
+      _receivedFiles.add(target.path);
+      if (mounted) setState(() {});
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<void> _scanQr(BuildContext context) async {
     final scanned = await Navigator.of(context).push<String>(
       MaterialPageRoute<String>(builder: (_) => const _QrScannerPage()),
@@ -1150,3 +1287,4 @@ class _ActionCard extends StatelessWidget {
       ),
     );
   }
+}
