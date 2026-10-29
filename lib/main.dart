@@ -1197,41 +1197,6 @@ class _ActionCard extends StatelessWidget {
     codeController.dispose();
   }
 
-  Future<List<Map<String, String>>> _discoverSenders() async {
-    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
-    final found = <String, Map<String, String>>{};
-    final completer = Completer<List<Map<String, String>>>();
-    late StreamSubscription<RawSocketEvent> subscription;
-    subscription = socket.listen((event) {
-      if (event != RawSocketEvent.read) return;
-      Datagram? packet;
-      while ((packet = socket.receive()) != null) {
-        try {
-          final decoded = jsonDecode(utf8.decode(packet!.data));
-          if (decoded is Map && decoded['type'] == 'airbridge_offer') {
-            final host = decoded['host']?.toString() ?? packet!.address.address;
-            final port = int.tryParse(decoded['port']?.toString() ?? '') ?? 8766;
-            final name = decoded['name']?.toString() ?? 'AirBridge device';
-            final url = 'http://$host:$port';
-            found[url] = {'url': url, 'name': name};
-          }
-        } catch (_) {}
-      }
-    });
-    socket.broadcastEnabled = true;
-    socket.send(utf8.encode(jsonEncode({'type': 'airbridge_discover'})),
-        InternetAddress('255.255.255.255'), 8767);
-    Future<void>.delayed(const Duration(seconds: 4)).then((_) {
-      if (!completer.isCompleted) completer.complete(found.values.toList());
-    });
-    try {
-      return await completer.future;
-    } finally {
-      await subscription.cancel();
-      socket.close();
-    }
-  }
-
   Future<List<String>> _receiveFromSender(Uri baseUri, String code) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
     final base = baseUri.replace(path: '', query: null, fragment: null);
