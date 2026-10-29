@@ -311,7 +311,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                             'AirBridge is designed for direct transfers '
                             'over your local network.',
                             style: TextStyle(
-                              color: Colors.white60,
+                              color: Colors.black54,
                               fontSize: 12,
                               height: 1.5,
                             ),
@@ -407,10 +407,10 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                     const SizedBox(height: 16),
                     Center(child: _qrCode(_sendUrl!)),
                     const SizedBox(height: 8),
-                    const Center(child: Text('Scan this code on the receiving device', style: TextStyle(color: Colors.white60, fontSize: 12))),
+                    const Center(child: Text('Scan this code on the receiving device', style: TextStyle(color: Colors.black54, fontSize: 12))),
                   ],
                   const SizedBox(height: 10),
-                  const Text('The receiver can scan the code or open the address in a browser on the same Wi-Fi. Keep AirBridge open while sharing.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  const Text('The receiver can scan the code or open the address in a browser on the same Wi-Fi. Keep AirBridge open while sharing.', style: TextStyle(color: Colors.black54, fontSize: 12)),
                 ],
               ],
             ),
@@ -818,18 +818,18 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                   const SizedBox(height: 16),
                   Center(child: _qrCode(_receiveUrl!)),
                   const SizedBox(height: 8),
-                  const Center(child: Text('Scan this code on the sending device', style: TextStyle(color: Colors.white60, fontSize: 12))),
+                  const Center(child: Text('Scan this code on the sending device', style: TextStyle(color: Colors.black54, fontSize: 12))),
                 ],
                 const SizedBox(height: 10),
                 const Text(
                   'Scan the code with AirBridge or open the address in a browser on the same Wi-Fi. Keep AirBridge open while receiving. Only use this on a trusted Wi-Fi network.',
-                  style: TextStyle(color: Colors.white60, fontSize: 12),
+                  style: TextStyle(color: Colors.black54, fontSize: 12),
                 ),
                 const SizedBox(height: 14),
                 const Text('Received in this session:', style: TextStyle(fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
                 if (_receivedFiles.isEmpty)
-                  const Text('No files received yet.', style: TextStyle(color: Colors.white54))
+                  const Text('No files received yet.', style: TextStyle(color: Colors.black54))
                 else
                   ..._receivedFiles.map((name) => Padding(
                         padding: const EdgeInsets.only(bottom: 4),
@@ -1008,7 +1008,7 @@ class _ActionCard extends StatelessWidget {
                       subtitle,
                       style: const TextStyle(
                         fontSize: 12,
-                        color: Colors.white54,
+                        color: Colors.black54,
                         height: 1.4,
                       ),
                     ),
