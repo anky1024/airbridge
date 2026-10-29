@@ -112,41 +112,32 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
 
               // App branding
               Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: teal.withValues(alpha: 0.13),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: const Icon(
-                      Icons.swap_horiz_rounded,
-                      color: teal,
-                      size: 34,
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(18),
+                    child: Image.asset(
+                      'logo.jpg',
+                      width: 112,
+                      height: 112,
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) => Container(
+                        width: 64,
+                        height: 64,
+                        decoration: BoxDecoration(
+                          color: teal.withValues(alpha: 0.13),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: const Icon(Icons.swap_horiz_rounded, color: teal, size: 34),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 13),
-                  const Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'AirBridge',
-                        style: TextStyle(
-                          fontSize: 25,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.3,
-                        ),
-                      ),
-                      SizedBox(height: 3),
-                      Text(
-                        'Share freely. Connect instantly.',
-                        style: TextStyle(
-                          color: Colors.black54,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      'Share freely. Connect instantly.',
+                      style: TextStyle(color: Colors.black54, fontSize: 12),
+                    ),
                   ),
                 ],
               ),
