@@ -673,49 +673,114 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
 
   Future<void> _showCodeConnect(BuildContext context) async {
     final controller = TextEditingController();
-    var busy = false;
-    var status = 'Enter the code shown on the sending phone.';
-    await showDialog<void>(
+    final code = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, refresh) => AlertDialog(
-          backgroundColor: Colors.white,
-          title: const Text('Enter sharing code'),
-          content: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('AirBridge will search for a sender on your local network and show the files available for download.'),
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        title: const Text('Enter sharing code'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Enter the four-digit code shown on the sending phone. '
+              'Both phones must be on the same local network.',
+            ),
             const SizedBox(height: 16),
-            TextField(controller: controller, autofocus: true, keyboardType: TextInputType.number, maxLength: 4, textAlign: TextAlign.center, style: const TextStyle(fontSize: 28, letterSpacing: 10, fontWeight: FontWeight.bold, color: Color(0xFF078CE8)), decoration: const InputDecoration(labelText: '4-digit sharing code', counterText: '', border: OutlineInputBorder())),
-            const SizedBox(height: 8),
-            Text(status, style: const TextStyle(color: Colors.black54)),
-          ]),
-          actions: [
-            TextButton(onPressed: busy ? null : () => Navigator.pop(dialogContext), child: const Text('Cancel')),
-            FilledButton(onPressed: busy ? null : () async {
-              final code = controller.text.trim();
-              if (!RegExp(r'^\d{4}
+            TextField(
+              controller: controller,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              maxLength: 4,
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(
+                labelText: '4-digit sharing code',
+                counterText: '',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (RegExp(r'^\\d{4}$').hasMatch(value)) {
+                Navigator.pop(dialogContext, value);
+              } else {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(content: Text('Enter a valid 4-digit code.')),
+                );
+              }
+            },
+            child: const Text('Find sender'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!context.mounted || code == null) return;
+
     try {
-      final client = HttpClient();
-      final verifyRequest = await client.getUrl(base.replace(path: '/verify', queryParameters: {'code': code}));
-      final verifyResponse = await verifyRequest.close();
-      final body = await utf8.decoder.bind(verifyResponse).join();
-      if (verifyResponse.statusCode != HttpStatus.ok) throw Exception('The code was not accepted. Check it and try again.');
-      final decoded = jsonDecode(body);
-      if (decoded is! Map || decoded['files'] is! List) throw Exception('Sender returned an invalid file list.');
-      final directory = await getApplicationDocumentsDirectory();
-      var count = 0;
-      final files = decoded['files'] as List;
-      for (var i = 0; i < files.length; i++) {
-        final item = files[i]; if (item is! Map) continue;
-        final name = (item['name']?.toString() ?? 'received_file').replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').replaceAll('..', '_');
-        final request = await client.getUrl(base.replace(path: '/download', queryParameters: {'index': '$i', 'code': code}));
-        final response = await request.close(); if (response.statusCode != HttpStatus.ok) continue;
-        final target = File('${directory.path}/$name'); final sink = target.openWrite();
-        await response.pipe(sink); _receivedFiles.add(target.path); count++;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Searching for the sending phone…')),
+      );
+      final senders = await _discoverSenders();
+      if (!context.mounted) return;
+      if (senders.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No sender found. Make sure sharing is started and both phones are on the same Wi-Fi.',
+            ),
+          ),
+        );
+        return;
       }
-      client.close(force: true);
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Received $count file(s). Saved inside AirBridge storage.')));
+
+      for (final sender in senders) {
+        final address = Uri.tryParse(sender['url'] ?? '');
+        if (address == null || address.host.isEmpty) continue;
+        try {
+          final client = HttpClient();
+          final request = await client.getUrl(
+            address.replace(
+              path: '/verify',
+              queryParameters: {'code': code},
+            ),
+          );
+          final response = await request.close();
+          final body = await utf8.decoder.bind(response).join();
+          client.close(force: true);
+          if (response.statusCode == HttpStatus.ok) {
+            await _receiveFromSender(address, code, context);
+            return;
+          }
+          // This sender did not match the code; continue checking other senders.
+          jsonDecode(body);
+        } catch (_) {
+          // Continue to the next discovered sender.
+        }
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'No nearby sender accepted that code. Check the code and try again.',
+            ),
+          ),
+        );
+      }
     } catch (error) {
-      if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not receive files: $error')));
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not find sender: $error')),
+        );
+      }
     }
   }
 
