@@ -673,7 +673,501 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
                     final code = codeController.text.trim();
                     final uri = Uri.tryParse(address);
                     if (uri == null || !['http', 'https'].contains(uri.scheme) ||
-                        uri.host.isEmpty || !RegExp(r'^\\d{4}$').hasMatch(code)) {
+                        uri.host.isEmpty || !RegExp(r'^\d{4}).hasMatch(code)) {
+                      refreshSheet(() => status = 'Enter a valid sender address and 4-digit code.');
+                      return;
+                    }
+                    refreshSheet(() { connecting = true; status = 'Checking code and looking for files…'; });
+                    try {
+                      final result = await _receiveFromSender(uri, code);
+                      if (!sheetContext.mounted) return;
+                      refreshSheet(() {
+                        connecting = false;
+                        status = 'Received ${result.length} file(s): ${result.join(', ')}';
+                      });
+                    } catch (error) {
+                      if (!sheetContext.mounted) return;
+                      refreshSheet(() {
+                        connecting = false;
+                        status = 'Could not connect: $error';
+                      });
+                    }
+                  },
+                  child: Text(connecting ? 'Connecting…' : 'Verify code and receive'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    addressController.dispose();
+    codeController.dispose();
+  }
+
+  Future<List<Map<String, String>>> _discoverSenders() async {
+    final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+    final found = <String, Map<String, String>>{};
+    final completer = Completer<List<Map<String, String>>>();
+    late StreamSubscription<RawSocketEvent> subscription;
+    subscription = socket.listen((event) {
+      if (event != RawSocketEvent.read) return;
+      Datagram? packet;
+      while ((packet = socket.receive()) != null) {
+        try {
+          final decoded = jsonDecode(utf8.decode(packet!.data));
+          if (decoded is Map && decoded['type'] == 'airbridge_offer') {
+            final host = decoded['host']?.toString() ?? packet!.address.address;
+            final port = int.tryParse(decoded['port']?.toString() ?? '') ?? 8766;
+            final name = decoded['name']?.toString() ?? 'AirBridge device';
+            final url = 'http://$host:$port';
+            found[url] = {'url': url, 'name': name};
+          }
+        } catch (_) {}
+      }
+    });
+    socket.broadcastEnabled = true;
+    socket.send(utf8.encode(jsonEncode({'type': 'airbridge_discover'})),
+        InternetAddress('255.255.255.255'), 8767);
+    Future<void>.delayed(const Duration(seconds: 4)).then((_) {
+      if (!completer.isCompleted) completer.complete(found.values.toList());
+    });
+    try {
+      return await completer.future;
+    } finally {
+      await subscription.cancel();
+      socket.close();
+    }
+  }
+
+  Future<List<String>> _receiveFromSender(Uri baseUri, String code) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 12);
+    final base = baseUri.replace(path: '', query: null, fragment: null);
+    try {
+      final verifyUri = base.replace(
+        path: '/verify',
+        queryParameters: {'code': code},
+      );
+      final verifyRequest = await client.getUrl(verifyUri);
+      final verifyResponse = await verifyRequest.close();
+      final verifyBody = await utf8.decoder.bind(verifyResponse).join();
+      if (verifyResponse.statusCode != HttpStatus.ok) {
+        throw Exception(verifyResponse.statusCode == HttpStatus.forbidden
+            ? 'The transfer code is incorrect.'
+            : 'Sender did not accept the request (HTTP ${verifyResponse.statusCode}).');
+      }
+      final decoded = jsonDecode(verifyBody);
+      if (decoded is! Map || decoded['files'] is! List) {
+        throw Exception('The sender returned an invalid file list.');
+      }
+      final files = decoded['files'] as List;
+      if (files.isEmpty) throw Exception('The sender has no files to share.');
+      final directory = await getApplicationDocumentsDirectory();
+      final receivedNames = <String>[];
+      for (final item in files) {
+        if (item is! Map) continue;
+        final index = int.tryParse(item['index'].toString());
+        if (index == null || index < 0) continue;
+        final rawName = item['name']?.toString() ?? 'received_file';
+        final safeName = rawName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').replaceAll('..', '_');
+        final downloadUri = base.replace(
+          path: '/download',
+          queryParameters: {'index': '$index', 'code': code},
+        );
+        final downloadRequest = await client.getUrl(downloadUri);
+        final downloadResponse = await downloadRequest.close();
+        if (downloadResponse.statusCode != HttpStatus.ok) {
+          await downloadResponse.drain<void>();
+          throw Exception('Failed to download $safeName (HTTP ${downloadResponse.statusCode}).');
+        }
+        var target = File('${directory.path}/$safeName');
+        var count = 1;
+        while (await target.exists()) {
+          final dot = safeName.lastIndexOf('.');
+          final name = dot > 0 ? safeName.substring(0, dot) : safeName;
+          final extension = dot > 0 ? safeName.substring(dot) : '';
+          target = File('${directory.path}/${name}_$count$extension');
+          count++;
+        }
+        final sink = target.openWrite();
+        await downloadResponse.pipe(sink);
+        receivedNames.add(target.uri.pathSegments.last);
+        if (mounted) setState(() => _receivedFiles.add(target.uri.pathSegments.last));
+      }
+      if (receivedNames.isEmpty) throw Exception('No files were downloaded.');
+      return receivedNames;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> _scanQr(BuildContext context) async {
+    final scanned = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(builder: (_) => const _QrScannerPage()),
+    );
+    if (!context.mounted || scanned == null) return;
+    final uri = Uri.tryParse(scanned.trim());
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https') || uri.host.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('That QR code is not a valid AirBridge sharing address.')),
+      );
+      return;
+    }
+    final shouldOpen = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: cardColor,
+        title: const Text('Open sharing address?'),
+        content: SelectableText(uri.toString(), style: const TextStyle(color: teal)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Open')),
+        ],
+      ),
+    );
+    if (!context.mounted || shouldOpen != true) return;
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!opened && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open that address.')));
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Could not open address: $error')));
+      }
+    }
+  }
+
+  static String _formatSize(int bytes) => bytes < 1024
+      ? '$bytes B'
+      : bytes < 1024 * 1024
+          ? '${(bytes / 1024).toStringAsFixed(1)} KB'
+          : '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+
+  Future<void> _startReceiving(BuildContext context) async {
+    try {
+      if (_receiveServer != null) {
+        await _showReceiverDialog(context);
+        return;
+      }
+
+      final interfaces = await NetworkInterface.list(
+        includeLoopback: false,
+        type: InternetAddressType.IPv4,
+      );
+      final addresses = interfaces
+          .expand((interface) => interface.addresses)
+          .where((address) => !address.isLoopback && !address.isLinkLocal)
+          .toList();
+
+      if (addresses.isEmpty) {
+        throw Exception('No local Wi-Fi address found. Connect to Wi-Fi and try again.');
+      }
+
+      final server = await HttpServer.bind(InternetAddress.anyIPv4, 8765);
+      _receiveServer = server;
+      _receiveUrl = 'http://${addresses.first.address}:8765';
+
+      server.listen((request) async {
+        try {
+          if (request.method == 'GET' && request.uri.path == '/') {
+            request.response.headers.contentType = ContentType.html;
+            request.response.write(_receiverHtml);
+            await request.response.close();
+            return;
+          }
+
+          if (request.method == 'POST' && request.uri.path == '/upload') {
+            final rawName = request.uri.queryParameters['name'] ?? 'received_file';
+            final safeName = rawName
+                .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_')
+                .replaceAll('..', '_');
+            final directory = await getApplicationDocumentsDirectory();
+            var target = File('${directory.path}/$safeName');
+            var count = 1;
+            while (await target.exists()) {
+              final dot = safeName.lastIndexOf('.');
+              final base = dot > 0 ? safeName.substring(0, dot) : safeName;
+              final ext = dot > 0 ? safeName.substring(dot) : '';
+              target = File('${directory.path}/${base}_$count$ext');
+              count++;
+            }
+            await target.writeAsBytes(await request.fold<List<int>>(
+              <int>[],
+              (bytes, chunk) => bytes..addAll(chunk),
+            ));
+            if (mounted) {
+              setState(() => _receivedFiles.add(target.uri.pathSegments.last));
+              _refreshReceiverDialog?.call(() {});
+            }
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..headers.contentType = ContentType.text
+              ..write('Received successfully');
+            await request.response.close();
+            return;
+          }
+
+          request.response
+            ..statusCode = HttpStatus.notFound
+            ..write('Not found');
+          await request.response.close();
+        } catch (error) {
+          request.response
+            ..statusCode = HttpStatus.internalServerError
+            ..write('Upload failed');
+          await request.response.close();
+        }
+      });
+
+      if (!context.mounted) return;
+      await _showReceiverDialog(context);
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not start receiving: $error')),
+      );
+    }
+  }
+
+  Future<void> _showReceiverDialog(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, refreshDialog) {
+          _refreshReceiverDialog = refreshDialog;
+          return AlertDialog(
+          backgroundColor: cardColor,
+          scrollable: true,
+          title: const Text('Receive files'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(Icons.wifi_tethering_rounded, color: teal, size: 38),
+                const SizedBox(height: 12),
+                const Text('On the sending device, open a browser connected to the same Wi-Fi and visit:'),
+                const SizedBox(height: 10),
+                SelectableText(
+                  _receiveUrl ?? '',
+                  style: const TextStyle(color: teal, fontWeight: FontWeight.bold),
+                ),
+                if (_receiveUrl != null) ...[
+                  const SizedBox(height: 16),
+                  Center(child: _qrCode(_receiveUrl!)),
+                  const SizedBox(height: 8),
+                  const Center(child: Text('Scan this code on the sending device', style: TextStyle(color: Colors.white60, fontSize: 12))),
+                ],
+                const SizedBox(height: 10),
+                const Text(
+                  'Scan the code with AirBridge or open the address in a browser on the same Wi-Fi. Keep AirBridge open while receiving. Only use this on a trusted Wi-Fi network.',
+                  style: TextStyle(color: Colors.white60, fontSize: 12),
+                ),
+                const SizedBox(height: 14),
+                const Text('Received in this session:', style: TextStyle(fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                if (_receivedFiles.isEmpty)
+                  const Text('No files received yet.', style: TextStyle(color: Colors.white54))
+                else
+                  ..._receivedFiles.map((name) => Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text('✓ $name', maxLines: 2, overflow: TextOverflow.ellipsis),
+                      )),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await _receiveServer?.close(force: true);
+                _receiveServer = null;
+                if (mounted) {
+                  setState(() => _receiveUrl = null);
+                }
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+              },
+              child: const Text('Stop receiving'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Done'),
+            ),
+          ],
+          );
+        },
+      ),
+    );
+  }
+
+  static const String _receiverHtml = r'''<!doctype html>
+<html><head><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AirBridge Receive</title>
+<style>
+body{font-family:system-ui;background:#0b1220;color:#f5f7fb;max-width:620px;margin:40px auto;padding:20px}
+main{background:#151f30;border:1px solid #2b394d;border-radius:18px;padding:24px}
+h1{color:#20d6c7}button{background:#20d6c7;border:0;border-radius:10px;padding:12px 18px;font-weight:700}
+input{margin:16px 0;max-width:100%}#status{white-space:pre-wrap;color:#20d6c7}
+</style></head><body><main><h1>AirBridge</h1><h2>Send files to this device</h2>
+<p>Choose files below, then tap Upload. Keep the receiving phone open in AirBridge.</p>
+<input id="files" type="file" multiple><br><button onclick="upload()">Upload files</button>
+<p id="status">Waiting for files.</p></main>
+<script>
+async function upload(){
+ const files=document.getElementById('files').files;
+ const status=document.getElementById('status');
+ if(!files.length){status.textContent='Choose at least one file first.';return;}
+ for(const file of files){
+  status.textContent='Uploading '+file.name+'...';
+  try{
+   const response=await fetch('/upload?name='+encodeURIComponent(file.name),{method:'POST',body:file});
+   if(!response.ok)throw new Error('Upload failed');
+   status.textContent+='\n✓ '+file.name+' received';
+  }catch(e){status.textContent+='\n✗ '+file.name+': '+e.message;break;}
+ }
+}
+</script></body></html>''';
+
+}
+
+
+class _QrScannerPage extends StatefulWidget {
+  const _QrScannerPage();
+
+  @override
+  State<_QrScannerPage> createState() => _QrScannerPageState();
+}
+
+class _QrScannerPageState extends State<_QrScannerPage> {
+  bool _handled = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Scan AirBridge QR'), backgroundColor: const Color(0xFFF3F9FF)),
+      body: Stack(
+        children: [
+          MobileScanner(
+            onDetect: (capture) {
+              if (_handled) return;
+              for (final barcode in capture.barcodes) {
+                final value = barcode.rawValue;
+                if (value != null && value.trim().isNotEmpty) {
+                  _handled = true;
+                  Navigator.of(context).pop(value.trim());
+                  return;
+                }
+              }
+            },
+          ),
+          Center(
+            child: Container(
+              width: 260,
+              height: 260,
+              decoration: BoxDecoration(
+                border: Border.all(color: const Color(0xFF249DE8), width: 3),
+                borderRadius: BorderRadius.circular(22),
+              ),
+            ),
+          ),
+          const Positioned(
+            left: 24,
+            right: 24,
+            bottom: 44,
+            child: Text(
+              'Point your camera at the QR code shown on the other device.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.white, fontSize: 14, shadows: [Shadow(color: Colors.black, blurRadius: 8)]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActionCard extends StatelessWidget {
+  const _ActionCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.color,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final Color color;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white10),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 50,
+                height: 50,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(15),
+                ),
+                child: Icon(
+                  icon,
+                  color: color,
+                  size: 27,
+                ),
+              ),
+              const SizedBox(width: 15),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Colors.white54,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(
+                Icons.arrow_forward_ios_rounded,
+                color: color,
+                size: 16,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}).hasMatch(code)) {
                       refreshSheet(() => status = 'Enter a valid sender address and 4-digit code.');
                       return;
                     }
