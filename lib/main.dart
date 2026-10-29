@@ -488,7 +488,7 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
             request.response.headers.contentType = ContentType.html;
             final rows = _sharedFiles.asMap().entries.map((entry) {
               final name = const HtmlEscape().convert(entry.value.name);
-              return '<li><a href="/download?index=${entry.key}">Download $name</a> <small>(${_formatSize(entry.value.size)})</small></li>';
+              return '<li><a href="/download?index=${entry.key}&amp;code=$_transferCode">Download $name</a> <small>(${_formatSize(entry.value.size)})</small></li>';
             }).join('\n');
             request.response.write('''<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>AirBridge downloads</title><style>body{font-family:system-ui;background:#0b1220;color:#f5f7fb;max-width:620px;margin:40px auto;padding:20px}main{background:#151f30;border:1px solid #2b394d;border-radius:18px;padding:24px}h1{color:#20d6c7}a{color:#20d6c7;line-height:2}</style></head><body><main><h1>AirBridge</h1><h2>Download shared files</h2><p>Tap a file below to download it to this device.</p><ul>$rows</ul></main></body></html>''');
             await request.response.close();
@@ -672,107 +672,120 @@ class _AirBridgeHomePageState extends State<AirBridgeHomePage> {
   }
 
   Future<void> _showCodeConnect(BuildContext context) async {
-    final controller = TextEditingController();
-    final code = await showDialog<String>(
+    final codeController = TextEditingController();
+    final addressController = TextEditingController();
+    final accepted = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: Colors.white,
+        backgroundColor: const Color(0xFFF1F9FF),
         title: const Text('Enter sharing code'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              'Enter the four-digit code shown on the sending phone. '
-              'Both phones must be on the same local network.',
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: controller,
-              autofocus: true,
-              keyboardType: TextInputType.number,
-              maxLength: 4,
-              textAlign: TextAlign.center,
-              decoration: const InputDecoration(
-                labelText: '4-digit sharing code',
-                counterText: '',
-                border: OutlineInputBorder(),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Enter the PIN from the sending phone. QR scanning is optional. '
+                'If nearby search cannot find the sender, enter its sharing address below.',
               ),
-            ),
-          ],
+              const SizedBox(height: 16),
+              TextField(
+                controller: codeController,
+                autofocus: true,
+                keyboardType: TextInputType.number,
+                maxLength: 4,
+                textAlign: TextAlign.center,
+                decoration: const InputDecoration(
+                  labelText: '4-digit PIN',
+                  counterText: '',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: addressController,
+                keyboardType: TextInputType.url,
+                decoration: const InputDecoration(
+                  labelText: 'Sender address (optional)',
+                  hintText: 'http://192.168.1.6:8766',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
+            onPressed: () => Navigator.pop(dialogContext, false),
             child: const Text('Cancel'),
           ),
           FilledButton(
             onPressed: () {
-              final value = controller.text.trim();
-              if (RegExp(r'^\\d{4}$').hasMatch(value)) {
-                Navigator.pop(dialogContext, value);
+              if (RegExp(r'^\\d{4}$').hasMatch(codeController.text.trim())) {
+                Navigator.pop(dialogContext, true);
               } else {
                 ScaffoldMessenger.of(dialogContext).showSnackBar(
-                  const SnackBar(content: Text('Enter a valid 4-digit code.')),
+                  const SnackBar(content: Text('Enter a valid 4-digit PIN.')),
                 );
               }
             },
-            child: const Text('Find sender'),
+            child: const Text('Connect'),
           ),
         ],
       ),
     );
-    controller.dispose();
-    if (!context.mounted || code == null) return;
+    final code = codeController.text.trim();
+    final addressText = addressController.text.trim();
+    codeController.dispose();
+    addressController.dispose();
+    if (!context.mounted || accepted != true) return;
 
-    try {
+    final manualAddress = addressText.isEmpty ? null : Uri.tryParse(addressText);
+    if (addressText.isNotEmpty &&
+        (manualAddress == null ||
+            manualAddress.host.isEmpty ||
+            !['http', 'https'].contains(manualAddress.scheme))) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Searching for the sending phone…')),
+        const SnackBar(content: Text('Enter a valid sender address.')),
       );
+      return;
+    }
+
+    if (manualAddress != null) {
+      await _receiveFromSender(manualAddress, code, context);
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Searching nearby senders…')),
+    );
+    try {
       final senders = await _discoverSenders();
       if (!context.mounted) return;
       if (senders.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'No sender found. Make sure sharing is started and both phones are on the same Wi-Fi.',
+              'No sender found. On the sending phone, start sharing first. '
+              'You can retry or enter its address manually.',
             ),
           ),
         );
         return;
       }
-
       for (final sender in senders) {
         final address = Uri.tryParse(sender['url'] ?? '');
         if (address == null || address.host.isEmpty) continue;
         try {
-          final client = HttpClient();
-          final request = await client.getUrl(
-            address.replace(
-              path: '/verify',
-              queryParameters: {'code': code},
-            ),
-          );
-          final response = await request.close();
-          final body = await utf8.decoder.bind(response).join();
-          client.close(force: true);
-          if (response.statusCode == HttpStatus.ok) {
-            if (!context.mounted) return;
-            await _receiveFromSender(address, code, context);
-            return;
-          }
-          // This sender did not match the code; continue checking other senders.
-          jsonDecode(body);
+          await _receiveFromSender(address, code, context);
+          return;
         } catch (_) {
-          // Continue to the next discovered sender.
+          // Try another discovered sender.
         }
       }
-
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'No nearby sender accepted that code. Check the code and try again.',
-            ),
+            content: Text('No sender accepted that PIN. Check the PIN and try again.'),
           ),
         );
       }
@@ -1226,7 +1239,7 @@ class _ActionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.white,
+      color: const Color(0xFFF4FAFF),
       borderRadius: BorderRadius.circular(18),
       child: InkWell(
         onTap: onTap,
